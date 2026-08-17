@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>小猫重力乐园 🐱</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 100%; height: 100%;
+    overflow: hidden;
+    overscroll-behavior: none;
+    touch-action: none;
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  body {
+    background: #ffe9d6;
+    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  #stage { display: block; position: fixed; inset: 0; }
+
+  #hint {
+    position: fixed; left: 50%; top: calc(14px + env(safe-area-inset-top));
+    transform: translateX(-50%);
+    background: rgba(255,255,255,.9);
+    color: #8a5a3b;
+    padding: 8px 16px;
+    border-radius: 999px;
+    font-size: 13px;
+    pointer-events: none;
+    box-shadow: 0 4px 16px rgba(0,0,0,.08);
+    white-space: nowrap;
+    max-width: 96vw;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    z-index: 3;
+  }
+
+  #shakeBtn {
+    position: fixed; right: 16px;
+    bottom: calc(16px + env(safe-area-inset-bottom));
+    width: 66px; height: 66px;
+    border-radius: 50%;
+    border: none;
+    background: linear-gradient(145deg, #ffb48a, #ff8f66);
+    color: #fff;
+    font-size: 32px;
+    line-height: 1;
+    box-shadow: 0 8px 22px rgba(255,120,70,.45);
+    cursor: pointer;
+    z-index: 4;
+  }
+  #shakeBtn:active { transform: scale(.9); }
+
+  #overlay {
+    position: fixed; inset: 0;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    background: rgba(255,233,214,.94);
+    text-align: center;
+    z-index: 10;
+  }
+  .cats-emoji { font-size: 58px; margin-bottom: 12px; letter-spacing: 6px; }
+  #overlay p { color: #8a5a3b; margin: 0 24px 22px; font-size: 15px; line-height: 1.7; }
+  #startBtn {
+    padding: 15px 40px; font-size: 18px;
+    border: none; border-radius: 999px;
+    background: linear-gradient(145deg, #ffb48a, #ff8f66);
+    color: #fff; cursor: pointer;
+    box-shadow: 0 8px 24px rgba(255,140,90,.45);
+  }
+  #startBtn:active { transform: scale(.96); }
+</style>
+</head>
+<body>
+<canvas id="stage"></canvas>
+<div id="hint">倾斜手机让小猫滚动 · 摇晃手机抖散它们 · 点击屏幕添加小猫</div>
+<button id="shakeBtn" aria-label="摇一摇">🌀</button>
+<div id="overlay">
+  <div class="cats-emoji">🐱🐈😸</div>
+  <p>倾斜手机，小猫会滚到一边<br>用力摇晃，把它们抖得滚来滚去、叠成一团</p>
+  <button id="startBtn">开始玩耍</button>
+</div>
+
+<script>
+(function () {
+  var sources = [
+    'matter.min.js',
+    'https://cdnjs.cloudflare.com/ajax/libs/matter-js/0.19.0/matter.min.js',
+    'https://unpkg.com/matter-js@0.19.0/build/matter.min.js'
+  ];
+  var idx = 0;
+
+  function attempt() {
+    if (idx >= sources.length) {
+      document.getElementById('overlay').innerHTML =
+        '<p>物理引擎加载失败，请检查网络连接后刷新页面。</p>';
+      return;
+    }
+    var s = document.createElement('script');
+    s.src = sources[idx++];
+    s.onload = function () {
+      if (typeof Matter !== 'undefined') { startGame(); }
+      else { attempt(); }
+    };
+    s.onerror = attempt;
+    document.head.appendChild(s);
+  }
+  attempt();
+
+  function clamp(v, a, b) { return v < a ? a : (v > b ? b : v); }
+
+  function startGame() {
+    var Engine = Matter.Engine, World = Matter.World, Bodies = Matter.Bodies,
+        Body = Matter.Body, Composite = Matter.Composite;
+
+    var engine = Engine.create();
+    var world = engine.world;
+    engine.gravity.x = 0;
+    engine.gravity.y = 1;
+
+    var canvas = document.getElementById('stage');
+    var ctx = canvas.getContext('2d');
+    var W = 0, H = 0, DPR = 1;
+    var walls = [];
+    var cats = [];
+
+    var CAT_EMOJIS = ['🐱', '🐈', '😺', '😸', '😹', '😻', '😼', '😽', '🙀'];
+    var EMOJI_FONT = '"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",sans-serif';
+
+    var deviceActive = false;
+    var deviceTilt = 0, mouseTilt = 0, keyTilt = 0;
+    var lastShake = 0;
+
+    var isTouch = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
+
+    var hint = document.getElementById('hint');
+    if (typeof window.DeviceOrientationEvent === 'function') {
+      hint.textContent = '倾斜手机让小猫滚动 · 摇晃手机抖散它们 · 点击屏幕添加小猫';
+    } else {
+      hint.textContent = '移动鼠标或按 ← → 让小猫滚动 · 按空格/点按钮摇一摇 · 点击屏幕添加小猫';
+    }
+
+    function resize() {
+      W = window.innerWidth; H = window.innerHeight;
+      DPR = Math.min(window.devicePixelRatio || 1, 2);
+      canvas.width = Math.round(W * DPR);
+      canvas.height = Math.round(H * DPR);
+      canvas.style.width = W + 'px';
+      canvas.style.height = H + 'px';
+      ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+      buildWalls();
+      // 收拢可能跑到墙外的小猫
+      for (var i = 0; i < cats.length; i++) {
+        var b = cats[i];
+        var r = b.circleRadius;
+        var x = clamp(b.position.x, r, W - r);
+        var y = Math.min(b.position.y, H - r);
+        Body.setPosition(b, { x: x, y: y });
+      }
+    }
+
+    function buildWalls() {
+      for (var i = 0; i < walls.length; i++) Composite.remove(world, walls[i]);
+      walls = [];
+      var t = 120;
+      var o = { isStatic: true, friction: 0.7, restitution: 0.15 };
+      walls.push(Bodies.rectangle(W / 2, H + t / 2, W + t * 2, t, o)); // 地面
+      walls.push(Bodies.rectangle(-t / 2, H / 2, t, H * 2, o));        // 左墙
+      walls.push(Bodies.rectangle(W + t / 2, H / 2, t, H * 2, o));     // 右墙
+      Composite.add(world, walls);
+    }
+
+    function addCat(x, y) {
+      var r = 22 + Math.random() * 20;
+      var body = Bodies.circle(
+        (x == null) ? Math.random() * W : x,
+        (y == null) ? -r - Math.random() * H : y,
+        r,
+        {
+          restitution: 0.35,
+          friction: 0.5,
+          density: 0.0011 + Math.random() * 0.0004,
+          angle: Math.random() * Math.PI * 2,
+          frictionAir: 0.012
+        }
+      );
+      body.emoji = CAT_EMOJIS[(Math.random() * CAT_EMOJIS.length) | 0];
+      Composite.add(world, body);
+      cats.push(body);
+      return body;
+    }
+
+    function shakeCats() {
+      var now = Date.now();
+      if (now - lastShake < 350) return;
+      lastShake = now;
+      for (var i = 0; i < cats.length; i++) {
+        var b = cats[i];
+        Body.setVelocity(b, {
+          x: (Math.random() - 0.5) * 22,
+          y: -(Math.random() * 22 + 6)
+        });
+        Body.setAngularVelocity(b, (Math.random() - 0.5) * 0.7);
+      }
+    }
+
+    function currentTilt() {
+      if (deviceActive) return deviceTilt;
+      if (keyTilt !== 0) return keyTilt * 1.1;
+      return mouseTilt;
+    }
+
+    function draw() {
+      var g = ctx.createLinearGradient(0, 0, 0, H);
+      g.addColorStop(0, '#ffe3c8');
+      g.addColorStop(1, '#ffd2ab');
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, W, H);
+
+      // 地面阴影条
+      ctx.fillStyle = 'rgba(180,120,80,.18)';
+      ctx.fillRect(0, H - 26, W, 26);
+
+      for (var i = 0; i < cats.length; i++) {
+        var b = cats[i];
+        ctx.save();
+        ctx.translate(b.position.x, b.position.y);
+        ctx.rotate(b.angle);
+        var fs = Math.round(b.circleRadius * 1.75);
+        ctx.font = fs + 'px ' + EMOJI_FONT;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(b.emoji, 0, fs * 0.04);
+        ctx.restore();
+      }
+    }
+
+    function loop() {
+      engine.gravity.x = currentTilt() * 1.4;
+      Engine.update(engine, 1000 / 60);
+      draw();
+      requestAnimationFrame(loop);
+    }
+
+    // ---------- 手机方向：让重力跟随倾斜 ----------
+    window.addEventListener('deviceorientation', function (e) {
+      var angle = (window.screen && screen.orientation && screen.orientation.angle) || 0;
+      var landscape = (angle % 180) !== 0;
+      var deg = landscape ? e.beta : e.gamma;
+      if (deg == null) return;
+      deviceActive = true;
+      deviceTilt = clamp(Math.sin(deg * Math.PI / 180) * 1.5, -1.4, 1.4);
+    }, true);
+
+    // ---------- 摇晃手机：抖散小猫 ----------
+    window.addEventListener('devicemotion', function (e) {
+      var a = e.accelerationIncludingGravity;
+      if (!a || a.x == null) return;
+      var m = Math.sqrt(a.x * a.x + a.y * a.y + a.z * a.z);
+      if (Math.abs(m - 9.8) > 12) shakeCats();
+    }, true);
+
+    // ---------- 桌面端控制 ----------
+    window.addEventListener('pointermove', function (e) {
+      if (e.pointerType === 'mouse') {
+        mouseTilt = ((e.clientX / W) - 0.5) * 2;
+      }
+    });
+
+    window.addEventListener('keydown', function (e) {
+      if (e.key === 'ArrowLeft') { keyTilt = -1; }
+      else if (e.key === 'ArrowRight') { keyTilt = 1; }
+      else if (e.key === ' ') { e.preventDefault(); shakeCats(); }
+    });
+    window.addEventListener('keyup', function (e) {
+      if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { keyTilt = 0; }
+    });
+
+    // ---------- 交互 ----------
+    document.getElementById('shakeBtn').addEventListener('click', shakeCats);
+
+    canvas.addEventListener('pointerdown', function (e) {
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
+      addCat(e.clientX, e.clientY - 40);
+    });
+
+    window.addEventListener('resize', resize);
+    window.addEventListener('orientationchange', function () {
+      setTimeout(resize, 120);
+    });
+
+    // 防止下拉刷新 / 滚动
+    document.addEventListener('touchmove', function (e) { e.preventDefault(); }, { passive: false });
+
+    // ---------- 启动 ----------
+    var startBtn = document.getElementById('startBtn');
+    var overlay = document.getElementById('overlay');
+
+    function begin() {
+      overlay.style.display = 'none';
+      if (window.DeviceMotionEvent && typeof DeviceMotionEvent.requestPermission === 'function') {
+        DeviceMotionEvent.requestPermission().catch(function () {});
+      }
+      resize();
+      for (var i = 0; i < 13; i++) addCat();
+      requestAnimationFrame(loop);
+    }
+
+    startBtn.addEventListener('click', function () {
+      if (window.DeviceOrientationEvent && typeof DeviceOrientationEvent.requestPermission === 'function') {
+        DeviceOrientationEvent.requestPermission()
+          .then(function () { begin(); })
+          .catch(function () { begin(); });
+      } else {
+        begin();
+      }
+    });
+  }
+})();
+</script>
+</body>
+</html>
