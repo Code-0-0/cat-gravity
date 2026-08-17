@@ -290,6 +290,7 @@
       var fb = (landscape ? e.gamma : e.beta) * Math.PI / 180;
       gxT = Math.sin(side);
       gyT = Math.cos(side) * Math.sin(fb);
+      deviceActive = true;   // 没有加速度计时，用方向角兜底
     }, true);
 
     // ---------- 摇晃手机：抖散小猫 ----------
@@ -297,9 +298,10 @@
       var a = e.accelerationIncludingGravity;
       if (!a || a.x == null) return;
 
-      // 用加速度计直接拿到真实重力方向（设备坐标系 x 右 / y 上 / z 出屏）
+      // 加速度计报的是“支撑反力”（静止时指向 +y/+z 即上方），
+      // 取反才是重力拉动方向（向下）。
       var inv = 1 / 9.81;
-      var px = a.x * inv, py = a.y * inv;
+      var px = -a.x * inv, py = -a.y * inv;
       var o = getScreenAngle();
       var rx, ry, dx, dy; // 屏幕“右”“下”在设备坐标系里的方向
       if (o === 90)       { rx = 0;  ry = 1;  dx = 1;  dy = 0; }
