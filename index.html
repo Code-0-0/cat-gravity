@@ -136,6 +136,7 @@
     var firstDevice = true;
     var mouseTilt = 0, keyTilt = 0;
     var lastShake = 0;
+    var curGrav = { x: 0, y: 1.3 };  // 当前实际重力（屏幕坐标），供抖动方向使用
 
     var isTouch = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
 
@@ -201,11 +202,18 @@
       var now = Date.now();
       if (now - lastShake < 350) return;
       lastShake = now;
+      // 抖动方向相对重力：朝“反重力方向”弹起，再横向散开
+      var m = Math.sqrt(curGrav.x * curGrav.x + curGrav.y * curGrav.y) || 1;
+      var dx = curGrav.x / m, dy = curGrav.y / m;  // 重力方向（向下）
+      var upX = -dx, upY = -dy;                    // 反重力方向（向上）
+      var perpX = -dy, perpY = dx;                 // 与之垂直的横向
       for (var i = 0; i < cats.length; i++) {
         var b = cats[i];
+        var kick = Math.random() * 22 + 8;
+        var side = (Math.random() - 0.5) * 22;
         Body.setVelocity(b, {
-          x: (Math.random() - 0.5) * 22,
-          y: -(Math.random() * 22 + 6)
+          x: upX * kick + perpX * side,
+          y: upY * kick + perpY * side
         });
         Body.setAngularVelocity(b, (Math.random() - 0.5) * 0.7);
       }
@@ -277,6 +285,7 @@
       var gv = currentGravity();
       engine.gravity.x = gv.x;
       engine.gravity.y = gv.y;
+      curGrav.x = gv.x; curGrav.y = gv.y;
       Engine.update(engine, 1000 / 60);
       draw();
       requestAnimationFrame(loop);
