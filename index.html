@@ -160,7 +160,7 @@
         var b = cats[i];
         var r = b.circleRadius;
         var x = clamp(b.position.x, r, W - r);
-        var y = Math.min(b.position.y, H - r);
+        var y = clamp(b.position.y, r, H - r);
         Body.setPosition(b, { x: x, y: y });
       }
     }
@@ -171,6 +171,7 @@
       var t = 120;
       var o = { isStatic: true, friction: 0.7, restitution: 0.15 };
       walls.push(Bodies.rectangle(W / 2, H + t / 2, W + t * 2, t, o)); // 地面
+      walls.push(Bodies.rectangle(W / 2, -t / 2, W + t * 2, t, o));   // 顶面（倒置时接住猫）
       walls.push(Bodies.rectangle(-t / 2, H / 2, t, H * 2, o));        // 左墙
       walls.push(Bodies.rectangle(W + t / 2, H / 2, t, H * 2, o));     // 右墙
       Composite.add(world, walls);
@@ -180,7 +181,7 @@
       var r = 26 + Math.random() * 20;
       var body = Bodies.circle(
         (x == null) ? Math.random() * W : x,
-        (y == null) ? (-r + Math.random() * H * 0.6) : y,
+        (y == null) ? (r + Math.random() * H * 0.4) : y,
         r,
         {
           restitution: 0.35,
