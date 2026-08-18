@@ -128,7 +128,7 @@
     var walls = [];
     var cats = [];
 
-    var SECTORS = 6;                 // 万花筒镜像扇区数
+    var SECTORS = 3; // 万花筒镜像扇区数 ***
     var CAT_EMOJIS = ['🐱', '🐈', '😺', '😸', '😹', '😻', '😼', '😽', '🙀'];
     var EMOJI_FONT = '"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",sans-serif';
 
@@ -194,7 +194,7 @@
     }
 
     function addCat(x, y) {
-      var r = 26 + Math.random() * 20;
+      var r = 18 + Math.random() * 20;
       var px, py;
       if (x == null) {
         var a = Math.random() * Math.PI * 2;
@@ -412,7 +412,7 @@
         DeviceMotionEvent.requestPermission().catch(function () {});
       }
       resize();
-      for (var i = 0; i < 14; i++) addCat();
+      for (var i = 0; i < 5; i++) addCat(); //猫的数量
       requestAnimationFrame(loop);
     }
 
