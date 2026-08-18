@@ -1,0 +1,432 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>小猫万花筒 🐱</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 100%; height: 100%;
+    overflow: hidden;
+    overscroll-behavior: none;
+    touch-action: none;
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  body {
+    background: #0b0816;
+    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  #stage { display: block; position: fixed; inset: 0; }
+
+  #hint {
+    position: fixed; left: 50%; top: calc(14px + env(safe-area-inset-top));
+    transform: translateX(-50%);
+    background: rgba(255,255,255,.12);
+    color: #ffe2c4;
+    padding: 8px 16px;
+    border-radius: 999px;
+    font-size: 13px;
+    pointer-events: none;
+    box-shadow: 0 4px 16px rgba(0,0,0,.3);
+    white-space: nowrap;
+    max-width: 96vw;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    z-index: 3;
+  }
+
+  #shakeBtn {
+    position: fixed; right: 16px;
+    bottom: calc(16px + env(safe-area-inset-bottom));
+    width: 66px; height: 66px;
+    border-radius: 50%;
+    border: none;
+    background: linear-gradient(145deg, #ffb48a, #ff8f66);
+    color: #fff;
+    font-size: 32px;
+    line-height: 1;
+    box-shadow: 0 8px 22px rgba(255,120,70,.45);
+    cursor: pointer;
+    z-index: 4;
+  }
+  #shakeBtn:active { transform: scale(.9); }
+
+  #overlay {
+    position: fixed; inset: 0;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    background: rgba(11,8,22,.92);
+    text-align: center;
+    z-index: 10;
+  }
+  .cats-emoji { font-size: 58px; margin-bottom: 12px; letter-spacing: 6px; }
+  #overlay p { color: #ffe2c4; margin: 0 24px 22px; font-size: 15px; line-height: 1.7; }
+  #startBtn {
+    padding: 15px 40px; font-size: 18px;
+    border: none; border-radius: 999px;
+    background: linear-gradient(145deg, #ffb48a, #ff8f66);
+    color: #fff; cursor: pointer;
+    box-shadow: 0 8px 24px rgba(255,140,90,.45);
+  }
+  #startBtn:active { transform: scale(.96); }
+</style>
+</head>
+<body>
+<canvas id="stage"></canvas>
+<div id="hint">倾斜手机 · 摇晃抖散 · 点击添加小猫 · 万花筒对称</div>
+<button id="shakeBtn" aria-label="摇一摇">🌀</button>
+<div id="overlay">
+  <div class="cats-emoji">🐱🐈😸</div>
+  <p>小猫在万花筒里滚动、叠成一团<br>倾斜手机让它们转起来，用力摇晃把它们抖散</p>
+  <button id="startBtn">开始玩耍</button>
+</div>
+
+<script>
+(function () {
+  var sources = [
+    'matter.min.js',
+    'https://cdnjs.cloudflare.com/ajax/libs/matter-js/0.19.0/matter.min.js',
+    'https://unpkg.com/matter-js@0.19.0/build/matter.min.js'
+  ];
+  var idx = 0;
+
+  function attempt() {
+    if (idx >= sources.length) {
+      document.getElementById('overlay').innerHTML =
+        '<p>物理引擎加载失败，请检查网络连接后刷新页面。</p>';
+      return;
+    }
+    var s = document.createElement('script');
+    s.src = sources[idx++];
+    s.onload = function () {
+      if (typeof Matter !== 'undefined') { startGame(); }
+      else { attempt(); }
+    };
+    s.onerror = attempt;
+    document.head.appendChild(s);
+  }
+  attempt();
+
+  function clamp(v, a, b) { return v < a ? a : (v > b ? b : v); }
+
+  function startGame() {
+    var Engine = Matter.Engine, World = Matter.World, Bodies = Matter.Bodies,
+        Body = Matter.Body, Composite = Matter.Composite;
+
+    var engine = Engine.create();
+    var world = engine.world;
+    engine.gravity.x = 0;
+    engine.gravity.y = 1;
+
+    var canvas = document.getElementById('stage');
+    var ctx = canvas.getContext('2d');
+    var W = 0, H = 0, DPR = 1;
+    var cx = 0, cy = 0, R = 1;
+    var walls = [];
+    var cats = [];
+
+    var SECTORS = 6;                 // 万花筒镜像扇区数
+    var CAT_EMOJIS = ['🐱', '🐈', '😺', '😸', '😹', '😻', '😼', '😽', '🙀'];
+    var EMOJI_FONT = '"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",sans-serif';
+
+    var deviceActive = false;
+    var gxT = 0, gyT = 1;      // 目标重力方向（屏幕坐标）
+    var gx = 0, gy = 1;        // 平滑后的重力方向
+    var firstDevice = true;
+    var mouseTilt = 0, keyTilt = 0;
+    var lastShake = 0;
+    var curGrav = { x: 0, y: 1.3 };  // 当前实际重力，供抖动方向使用
+
+    var hint = document.getElementById('hint');
+    if (typeof window.DeviceOrientationEvent === 'function') {
+      hint.textContent = '倾斜手机 · 摇晃抖散 · 点击添加小猫 · 万花筒对称';
+    } else {
+      hint.textContent = '移动鼠标或 ← → 倾斜 · 空格/按钮摇一摇 · 点击添加小猫';
+    }
+
+    function resize() {
+      W = window.innerWidth; H = window.innerHeight;
+      DPR = Math.min(window.devicePixelRatio || 1, 2);
+      canvas.width = Math.round(W * DPR);
+      canvas.height = Math.round(H * DPR);
+      canvas.style.width = W + 'px';
+      canvas.style.height = H + 'px';
+      ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+      cx = W / 2; cy = H / 2;
+      R = Math.min(W, H) * 0.47;
+      buildWalls();
+      clampCats();
+    }
+
+    function buildWalls() {
+      for (var i = 0; i < walls.length; i++) Composite.remove(world, walls[i]);
+      walls = [];
+      // 用一圈短墙拼成圆形“万花筒管壁”
+      var segs = 60;
+      var chord = (Math.PI * 2 * R) / segs * 1.35;
+      for (var i = 0; i < segs; i++) {
+        var a = (i / segs) * Math.PI * 2;
+        var x = cx + Math.cos(a) * R;
+        var y = cy + Math.sin(a) * R;
+        walls.push(Bodies.rectangle(x, y, chord, 8, {
+          isStatic: true, friction: 0.7, restitution: 0.15,
+          angle: a + Math.PI / 2
+        }));
+      }
+      Composite.add(world, walls);
+    }
+
+    function clampCats() {
+      for (var i = 0; i < cats.length; i++) {
+        var b = cats[i];
+        var r = b.circleRadius;
+        var dx = b.position.x - cx, dy = b.position.y - cy;
+        var d = Math.sqrt(dx * dx + dy * dy) || 1;
+        var maxR = R - r - 6;
+        if (d > maxR) {
+          var s = maxR / d;
+          Body.setPosition(b, { x: cx + dx * s, y: cy + dy * s });
+        }
+      }
+    }
+
+    function addCat(x, y) {
+      var r = 26 + Math.random() * 20;
+      var px, py;
+      if (x == null) {
+        var a = Math.random() * Math.PI * 2;
+        var rad = Math.random() * Math.max(10, R * 0.55);
+        px = cx + Math.cos(a) * rad;
+        py = cy + Math.sin(a) * rad;
+      } else {
+        var dx = x - cx, dy = y - cy;
+        var d = Math.sqrt(dx * dx + dy * dy) || 1;
+        var maxR = Math.max(10, R - r - 6);
+        if (d > maxR) { dx = dx / d * maxR; dy = dy / d * maxR; }
+        px = cx + dx; py = cy + dy;
+      }
+      var body = Bodies.circle(px, py, r, {
+        restitution: 0.35,
+        friction: 0.5,
+        density: 0.0011 + Math.random() * 0.0004,
+        angle: Math.random() * Math.PI * 2,
+        frictionAir: 0.012
+      });
+      body.emoji = CAT_EMOJIS[(Math.random() * CAT_EMOJIS.length) | 0];
+      Composite.add(world, body);
+      cats.push(body);
+      return body;
+    }
+
+    function shakeCats() {
+      var now = Date.now();
+      if (now - lastShake < 350) return;
+      lastShake = now;
+      // 抖动方向相对重力：朝“反重力方向”弹起，再横向散开
+      var m = Math.sqrt(curGrav.x * curGrav.x + curGrav.y * curGrav.y) || 1;
+      var dx = curGrav.x / m, dy = curGrav.y / m;  // 重力方向（向下）
+      var upX = -dx, upY = -dy;                    // 反重力方向（向上）
+      var perpX = -dy, perpY = dx;                 // 与之垂直的横向
+      for (var i = 0; i < cats.length; i++) {
+        var b = cats[i];
+        var kick = Math.random() * 22 + 8;
+        var side = (Math.random() - 0.5) * 22;
+        Body.setVelocity(b, {
+          x: upX * kick + perpX * side,
+          y: upY * kick + perpY * side
+        });
+        Body.setAngularVelocity(b, (Math.random() - 0.5) * 0.7);
+      }
+    }
+
+    function getScreenAngle() {
+      var o = 0;
+      if (window.screen && screen.orientation && screen.orientation.angle != null) {
+        o = screen.orientation.angle;
+      } else if (typeof window.orientation === 'number') {
+        o = window.orientation;
+      }
+      return ((o % 360) + 360) % 360;
+    }
+
+    function currentGravity() {
+      if (deviceActive) {
+        if (firstDevice) { gx = gxT; gy = gyT; firstDevice = false; }
+        else {
+          gx += (gxT - gx) * 0.14;
+          gy += (gyT - gy) * 0.14;
+        }
+        return { x: gx * 1.3, y: gy * 1.3 };
+      }
+      var tilt = (keyTilt !== 0) ? keyTilt * 1.1 : mouseTilt;
+      return { x: tilt * 1.4, y: 1.3 };
+    }
+
+    function drawCat(b, x, y, rot, flip) {
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(rot);
+      if (flip) ctx.scale(1, -1);
+      var fs = Math.round(b.circleRadius * 1.9);
+      ctx.font = fs + 'px ' + EMOJI_FONT;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.shadowColor = 'rgba(255,150,90,.55)';
+      ctx.shadowBlur = 9;
+      ctx.fillText(b.emoji, 0, fs * 0.03);
+      ctx.restore();
+    }
+
+    function draw() {
+      // 万花筒暗色筒底
+      var g = ctx.createRadialGradient(cx, cy, 0, cx, cy, Math.max(W, H));
+      g.addColorStop(0, '#2a1e45');
+      g.addColorStop(1, '#0b0816');
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, W, H);
+
+      // 圆形管壁
+      ctx.strokeStyle = 'rgba(255,190,120,.35)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(cx, cy, R, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.fillStyle = 'rgba(18,12,34,.55)';
+      ctx.beginPath();
+      ctx.arc(cx, cy, R, 0, Math.PI * 2);
+      ctx.fill();
+
+      // 把每只猫折叠进一个扇区，再镜像铺满整圈 → 万花筒
+      var N = SECTORS;
+      var sector = Math.PI * 2 / N;
+      for (var i = 0; i < cats.length; i++) {
+        var b = cats[i];
+        var dx = b.position.x - cx, dy = b.position.y - cy;
+        var r = Math.sqrt(dx * dx + dy * dy);
+        var th = Math.atan2(dy, dx);
+        if (th < 0) th += Math.PI * 2;
+        var seg = Math.floor(th / sector);
+        var within = th - seg * sector;
+        var folded = (seg % 2 === 0) ? within : (sector - within);
+        var flipBase = (seg % 2 === 1);
+
+        for (var k = 0; k < N; k++) {
+          var phi = folded + k * sector;
+          var flip = flipBase ^ (k % 2 === 1);
+          var x = cx + Math.cos(phi) * r;
+          var y = cy + Math.sin(phi) * r;
+          drawCat(b, x, y, phi + b.angle, flip);
+        }
+      }
+    }
+
+    function loop() {
+      var gv = currentGravity();
+      engine.gravity.x = gv.x;
+      engine.gravity.y = gv.y;
+      curGrav.x = gv.x; curGrav.y = gv.y;
+      Engine.update(engine, 1000 / 60);
+      draw();
+      requestAnimationFrame(loop);
+    }
+
+    // ---------- 手机方向兜底（无加速度计时） ----------
+    window.addEventListener('deviceorientation', function (e) {
+      if (deviceActive) return;
+      if (e.gamma == null || e.beta == null) return;
+      var landscape = (getScreenAngle() % 180) !== 0;
+      var side = (landscape ? e.beta : e.gamma) * Math.PI / 180;
+      var fb = (landscape ? e.gamma : e.beta) * Math.PI / 180;
+      gxT = Math.sin(side);
+      gyT = Math.cos(side) * Math.sin(fb);
+      deviceActive = true;
+    }, true);
+
+    // ---------- 加速度计：真实重力 + 摇晃 ----------
+    window.addEventListener('devicemotion', function (e) {
+      var a = e.accelerationIncludingGravity;
+      if (!a || a.x == null) return;
+
+      // 加速度计报的是“支撑反力”，取反才是重力拉动方向
+      var inv = 1 / 9.81;
+      var px = -a.x * inv, py = -a.y * inv;
+      var o = getScreenAngle();
+      var rx, ry, dx, dy;
+      if (o === 90)       { rx = 0;  ry = 1;  dx = 1;  dy = 0; }
+      else if (o === 180) { rx = -1; ry = 0;  dx = 0;  dy = 1; }
+      else if (o === 270) { rx = 0;  ry = -1; dx = -1; dy = 0; }
+      else                { rx = 1;  ry = 0;  dx = 0;  dy = -1; }
+
+      var sx = px * rx + py * ry;
+      var sy = px * dx + py * dy;
+      var mag2 = Math.sqrt(sx * sx + sy * sy);
+      if (mag2 > 1.35) { sx = sx / mag2 * 1.35; sy = sy / mag2 * 1.35; }
+      gxT = sx; gyT = sy;
+      deviceActive = true;
+
+      var m = Math.sqrt(a.x * a.x + a.y * a.y + a.z * a.z);
+      if (Math.abs(m - 9.8) > 12) shakeCats();
+    }, true);
+
+    // ---------- 桌面端控制 ----------
+    window.addEventListener('pointermove', function (e) {
+      if (e.pointerType === 'mouse') {
+        mouseTilt = ((e.clientX / W) - 0.5) * 2;
+      }
+    });
+
+    window.addEventListener('keydown', function (e) {
+      if (e.key === 'ArrowLeft') { keyTilt = -1; }
+      else if (e.key === 'ArrowRight') { keyTilt = 1; }
+      else if (e.key === ' ') { e.preventDefault(); shakeCats(); }
+    });
+    window.addEventListener('keyup', function (e) {
+      if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { keyTilt = 0; }
+    });
+
+    // ---------- 交互 ----------
+    document.getElementById('shakeBtn').addEventListener('click', shakeCats);
+
+    canvas.addEventListener('pointerdown', function (e) {
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
+      addCat(e.clientX, e.clientY);
+    });
+
+    window.addEventListener('resize', resize);
+    window.addEventListener('orientationchange', function () {
+      setTimeout(resize, 120);
+    });
+
+    document.addEventListener('touchmove', function (e) { e.preventDefault(); }, { passive: false });
+
+    // ---------- 启动 ----------
+    var startBtn = document.getElementById('startBtn');
+    var overlay = document.getElementById('overlay');
+
+    function begin() {
+      overlay.style.display = 'none';
+      if (window.DeviceMotionEvent && typeof DeviceMotionEvent.requestPermission === 'function') {
+        DeviceMotionEvent.requestPermission().catch(function () {});
+      }
+      resize();
+      for (var i = 0; i < 14; i++) addCat();
+      requestAnimationFrame(loop);
+    }
+
+    startBtn.addEventListener('click', function () {
+      if (window.DeviceOrientationEvent && typeof DeviceOrientationEvent.requestPermission === 'function') {
+        DeviceOrientationEvent.requestPermission()
+          .then(function () { begin(); })
+          .catch(function () { begin(); });
+      } else {
+        begin();
+      }
+    });
+  }
+})();
+</script>
+</body>
+</html>
